@@ -2,7 +2,7 @@
 
 import 'package:flowence/core/enums/user_role.dart';
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../data/models/user_model.dart';
 import '../../data/repositories/app_repository.dart';
 import '../../core/constants/app_constants.dart';
@@ -10,25 +10,25 @@ import '../../core/exceptions/app_exception.dart';
 
 class AuthViewModel extends ChangeNotifier {
   final AppRepository _repository = AppRepository();
-  
+  final _storage = const FlutterSecureStorage();
+
   UserModel? _currentUser;
   bool _isLoading = false;
   bool _isAuthenticated = false;
   String? _errorMessage;
-  
+
   // Getters
   UserModel? get currentUser => _currentUser;
   bool get isLoading => _isLoading;
   bool get isAuthenticated => _isAuthenticated;
   String? get errorMessage => _errorMessage;
-  
+
   // Initialize auth state
   Future<void> initialize() async {
     _setLoading(true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString(AppConstants.tokenKey);
-      
+      final token = await _storage.read(key: AppConstants.tokenKey);
+
       if (token != null) {
         // Try to get current user to validate token
         final user = await _repository.getCurrentUser();
@@ -41,22 +41,21 @@ class AuthViewModel extends ChangeNotifier {
     }
     _setLoading(false);
   }
-  
+
   // Login
   Future<bool> login(String email, String password) async {
     _setLoading(true);
-    _clearError();
-    
+    _clearError(); // Clear previous errors
+
     try {
       final result = await _repository.login(email, password);
-      
-      // Store auth data
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(AppConstants.tokenKey, result['token']);
-      
+
+      // Store auth data securely
+      await _storage.write(key: AppConstants.tokenKey, value: result['token']);
+
       _currentUser = UserModel.fromJson(result['user']);
       _isAuthenticated = true;
-      
+
       _setLoading(false);
       return true;
     } catch (e) {
@@ -65,22 +64,21 @@ class AuthViewModel extends ChangeNotifier {
       return false;
     }
   }
-  
+
   // Register
   Future<bool> register(String name, String email, String password) async {
     _setLoading(true);
-    _clearError();
-    
+    _clearError(); // Clear previous errors
+
     try {
       final result = await _repository.register(name, email, password);
-      
-      // Store auth data
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(AppConstants.tokenKey, result['token']);
-      
+
+      // Store auth data securely
+      await _storage.write(key: AppConstants.tokenKey, value: result['token']);
+
       _currentUser = UserModel.fromJson(result['user']);
       _isAuthenticated = true;
-      
+
       _setLoading(false);
       return true;
     } catch (e) {
@@ -89,40 +87,40 @@ class AuthViewModel extends ChangeNotifier {
       return false;
     }
   }
-  
+
   // Logout
   Future<void> logout() async {
     _setLoading(true);
-    
+
     try {
       await _repository.logout();
     } catch (e) {
       // Continue with logout even if API call fails
       debugPrint('Logout API error: $e');
     }
-    
+
     await _clearAuthData();
     _setLoading(false);
   }
-  
+
   // Update user profile
   Future<bool> updateProfile({
     String? name,
     String? email,
   }) async {
     if (_currentUser == null) return false;
-    
+
     _setLoading(true);
     _clearError();
-    
+
     try {
       final updateData = <String, dynamic>{};
       if (name != null) updateData['name'] = name;
       if (email != null) updateData['email'] = email;
-      
+
       final updatedUser = await _repository.updateUser(_currentUser!.id, updateData);
       _currentUser = updatedUser;
-      
+
       _setLoading(false);
       return true;
     } catch (e) {
@@ -131,11 +129,11 @@ class AuthViewModel extends ChangeNotifier {
       return false;
     }
   }
-  
+
   // Check if user has specific permission
   bool hasPermission(Permission permission) {
     if (_currentUser == null) return false;
-    
+
     switch (permission) {
       case Permission.createProject:
         return _currentUser!.role.canCreateProjects;
@@ -151,63 +149,62 @@ class AuthViewModel extends ChangeNotifier {
         return _currentUser!.role.canExportData;
     }
   }
-  
+
   // Check if user can access project
   bool canAccessProject(String projectId, String ownerId, List<String> memberIds) {
     if (_currentUser == null) return false;
-    
+
     // Admin can access all projects
     if (_currentUser!.role.canViewAllProjects) return true;
-    
+
     // Owner and members can access
     return _currentUser!.id == ownerId || memberIds.contains(_currentUser!.id);
   }
-  
+
   // Check if user can edit task
   bool canEditTask(String taskCreatorId, String? taskAssigneeId, String projectOwnerId) {
     if (_currentUser == null) return false;
-    
+
     // Admin can edit all tasks
     if (_currentUser!.role.canViewAllProjects) return true;
-    
+
     // Task creator, assignee, or project owner can edit
     return _currentUser!.id == taskCreatorId ||
            _currentUser!.id == taskAssigneeId ||
            _currentUser!.id == projectOwnerId;
   }
-  
+
   // Private methods
   void _setLoading(bool loading) {
     _isLoading = loading;
     notifyListeners();
   }
-  
+
   void _setError(String error) {
     _errorMessage = error;
     notifyListeners();
   }
-  
+
   void _clearError() {
     _errorMessage = null;
-    notifyListeners();
+    notifyListeners(); // FIX: Notify listeners when error is cleared
   }
-  
+
   Future<void> _clearAuthData() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(AppConstants.tokenKey);
-    
+    await _storage.delete(key: AppConstants.tokenKey);
+
     _currentUser = null;
     _isAuthenticated = false;
     notifyListeners();
   }
-  
+
   String _getErrorMessage(dynamic error) {
     if (error is AppException) {
       return error.message;
     }
     return error.toString().replaceFirst('Exception: ', '');
   }
-  
+
   // Clear error manually
   void clearError() {
     _clearError();

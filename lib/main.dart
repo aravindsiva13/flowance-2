@@ -26,12 +26,29 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
+        // Standalone ViewModels
         ChangeNotifierProvider(create: (_) => AuthViewModel()),
         ChangeNotifierProvider(create: (_) => DashboardViewModel()),
         ChangeNotifierProvider(create: (_) => ProjectViewModel()),
-        ChangeNotifierProvider(create: (_) => TaskViewModel()),
         ChangeNotifierProvider(create: (_) => UserViewModel()),
-        ChangeNotifierProvider(create: (_) => TimeTrackingViewModel()),
+
+        // Dependent ViewModels using ProxyProviders
+        ChangeNotifierProxyProvider<ProjectViewModel, TaskViewModel>(
+          create: (context) => TaskViewModel(
+            projectViewModel: Provider.of<ProjectViewModel>(context, listen: false),
+          ),
+          update: (context, projectViewModel, previousTaskViewModel) =>
+              previousTaskViewModel!..update(projectViewModel),
+        ),
+
+        ChangeNotifierProxyProvider2<ProjectViewModel, TaskViewModel, TimeTrackingViewModel>(
+          create: (context) => TimeTrackingViewModel(
+            projectViewModel: Provider.of<ProjectViewModel>(context, listen: false),
+            taskViewModel: Provider.of<TaskViewModel>(context, listen: false),
+          ),
+          update: (context, projectViewModel, taskViewModel, previousTimeTrackingViewModel) =>
+              previousTimeTrackingViewModel!..update(projectViewModel, taskViewModel),
+        ),
       ],
       child: MaterialApp(
         title: 'Flowence - Project Manager',

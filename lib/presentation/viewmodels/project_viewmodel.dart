@@ -1,4 +1,3 @@
-
 import 'package:flutter/foundation.dart';
 import '../../data/models/project_model.dart';
 import '../../data/models/task_model.dart';
@@ -11,7 +10,7 @@ import '../../core/exceptions/app_exception.dart';
 
 class ProjectViewModel extends ChangeNotifier {
   final AppRepository _repository = AppRepository();
-  
+
   List<ProjectModel> _projects = [];
   List<UserModel> _availableUsers = [];
   bool _isLoading = false;
@@ -19,18 +18,18 @@ class ProjectViewModel extends ChangeNotifier {
   bool _isUpdating = false;
   bool _isDeleting = false;
   String? _errorMessage;
-  
+
   // Enhanced analytics data
   Map<String, dynamic> _projectAnalytics = {};
   Map<String, List<TimeEntryModel>> _projectTimeEntries = {};
   Map<String, double> _projectBudgets = {};
   Map<String, double> _projectProgress = {};
-  
+
   // Filter and search
   ProjectStatus? _statusFilter;
   String? _searchQuery;
   String? _ownerFilter;
-  
+
   // Getters
   List<ProjectModel> get projects => _filteredProjects;
   List<UserModel> get availableUsers => _availableUsers;
@@ -41,7 +40,7 @@ class ProjectViewModel extends ChangeNotifier {
   bool get isDeleting => _isDeleting;
   String? get errorMessage => _errorMessage;
   Map<String, dynamic> get projectAnalytics => _projectAnalytics;
-  
+
   // Filtered projects based on current filters
   List<ProjectModel> get _filteredProjects {
     var filtered = _projects.where((project) {
@@ -49,7 +48,7 @@ class ProjectViewModel extends ChangeNotifier {
       if (_statusFilter != null && project.status != _statusFilter) {
         return false;
       }
-      
+
       // Search query filter
       if (_searchQuery != null && _searchQuery!.isNotEmpty) {
         final query = _searchQuery!.toLowerCase();
@@ -58,15 +57,15 @@ class ProjectViewModel extends ChangeNotifier {
           return false;
         }
       }
-      
+
       // Owner filter
       if (_ownerFilter != null && project.ownerId != _ownerFilter) {
         return false;
       }
-      
+
       return true;
     }).toList();
-    
+
     // Sort by status priority and then by updated date
     filtered.sort((a, b) {
       final statusOrder = {
@@ -76,13 +75,13 @@ class ProjectViewModel extends ChangeNotifier {
         ProjectStatus.completed: 3,
         ProjectStatus.cancelled: 4,
       };
-      
+
       final statusComparison = statusOrder[a.status]!.compareTo(statusOrder[b.status]!);
       if (statusComparison != 0) return statusComparison;
-      
+
       return b.updatedAt.compareTo(a.updatedAt);
     });
-    
+
     return filtered;
   }
 
@@ -100,41 +99,40 @@ class ProjectViewModel extends ChangeNotifier {
     await _loadAvailableUsers();
   }
 
-  // Load projects with enhanced analytics
+  // Load projects
   Future<void> loadProjects({bool refresh = false}) async {
     if (_isLoading && !refresh) return;
-    
+
     _setLoading(true);
     _clearError();
-    
+
     try {
       _projects = await _repository.getProjects();
-      await _loadProjectAnalytics();
       await _loadAvailableUsers();
       notifyListeners();
     } catch (e) {
       _setError('Failed to load projects: ${e.toString()}');
+      _projects = [];
     } finally {
       _setLoading(false);
     }
   }
 
-  // Load specific project by ID
+  // Load specific project by ID, now responsible for loading its own analytics.
   Future<void> loadProjectById(String projectId) async {
     _setLoading(true);
     _clearError();
-    
+
     try {
       final project = await _repository.getProjectById(projectId);
-      
-      // Update or add to projects list
+
       final index = _projects.indexWhere((p) => p.id == projectId);
       if (index >= 0) {
         _projects[index] = project;
       } else {
         _projects.add(project);
       }
-      
+
       await _loadProjectSpecificAnalytics(projectId);
       notifyListeners();
     } catch (e) {
@@ -144,31 +142,19 @@ class ProjectViewModel extends ChangeNotifier {
     }
   }
 
-  // Enhanced project analytics loading
-  Future<void> _loadProjectAnalytics() async {
-    for (final project in _projects) {
-      await _loadProjectSpecificAnalytics(project.id);
-    }
-  }
-
   Future<void> _loadProjectSpecificAnalytics(String projectId) async {
     try {
-      // Load tasks for this project
       final tasks = await _repository.getTasks(projectId: projectId);
-      
-      // Load time entries for this project
       final timeEntries = await _repository.getTimeEntries(projectId: projectId);
       _projectTimeEntries[projectId] = timeEntries;
-      
-      // Calculate analytics
+
       final analytics = _calculateProjectAnalytics(projectId, tasks, timeEntries);
       _projectAnalytics[projectId] = analytics;
-      
-      // Update project progress
+
       _projectProgress[projectId] = analytics['progress'] ?? 0.0;
-      
+
     } catch (e) {
-      debugPrint('Failed to load analytics for project $projectId: $e');
+      _setError('Failed to load analytics for project $projectId: $e');
     }
   }
 
@@ -180,27 +166,28 @@ class ProjectViewModel extends ChangeNotifier {
     final totalTasks = tasks.length;
     final completedTasks = tasks.where((t) => t.status == TaskStatus.completed).length;
     final inProgressTasks = tasks.where((t) => t.status == TaskStatus.inProgress).length;
-    
+
     final totalTime = timeEntries.fold<Duration>(
       Duration.zero,
       (sum, entry) => sum + _getEntryDuration(entry),
     );
-    
-    final budgetHours = _projectBudgets[projectId] ?? 160.0; // Default 160 hours
+
+    final budgetHours = _projectBudgets[projectId] ?? 160.0;
     final budgetUsed = totalTime.inHours / budgetHours;
-    
+
     final progress = totalTasks > 0 ? completedTasks / totalTasks : 0.0;
-    
-    // Calculate velocity (tasks completed per week)
-    final project = _projects.firstWhere((p) => p.id == projectId);
-    final weeksElapsed = project.startDate != null 
-  ? DateTime.now().difference(project.startDate!).inDays / 7 
+
+    // FIX: Use safe access for project
+    final project = getProjectById(projectId);
+    if (project == null) return {};
+
+    final weeksElapsed = project.startDate != null
+  ? DateTime.now().difference(project.startDate!).inDays / 7
   : 0.0;
     final velocity = weeksElapsed > 0 ? completedTasks / weeksElapsed : 0.0;
-    
-    // Calculate team productivity
+
     final teamProductivity = _calculateTeamProductivity(tasks, timeEntries);
-    
+
     return {
       'totalTasks': totalTasks,
       'completedTasks': completedTasks,
@@ -216,7 +203,6 @@ class ProjectViewModel extends ChangeNotifier {
     };
   }
 
-  // Helper method to get duration from time entry
   Duration _getEntryDuration(TimeEntryModel entry) {
     if (entry.endTime != null) {
       return entry.endTime!.difference(entry.startTime);
@@ -231,28 +217,25 @@ class ProjectViewModel extends ChangeNotifier {
     List<TimeEntryModel> timeEntries,
   ) {
     final productivity = <String, double>{};
-    
-    // Group time entries by user
+
     final userTimeMap = <String, Duration>{};
     for (final entry in timeEntries) {
       userTimeMap[entry.userId] = (userTimeMap[entry.userId] ?? Duration.zero) + _getEntryDuration(entry);
     }
-    
-    // Calculate tasks completed per user
+
     final userTaskMap = <String, int>{};
     for (final task in tasks) {
       if (task.status == TaskStatus.completed && task.assigneeId != null) {
         userTaskMap[task.assigneeId!] = (userTaskMap[task.assigneeId!] ?? 0) + 1;
       }
     }
-    
-    // Calculate productivity as tasks/hour
+
     for (final userId in userTimeMap.keys) {
       final timeHours = userTimeMap[userId]!.inHours;
       final tasksCompleted = userTaskMap[userId] ?? 0;
       productivity[userId] = timeHours > 0 ? tasksCompleted / timeHours : 0.0;
     }
-    
+
     return productivity;
   }
 
@@ -260,8 +243,6 @@ class ProjectViewModel extends ChangeNotifier {
     List<TaskModel> tasks,
     List<TimeEntryModel> timeEntries,
   ) {
-    // This would calculate how accurate time estimates are vs actual time
-    // For now, return a placeholder value
     return 0.78;
   }
 
@@ -274,10 +255,9 @@ class ProjectViewModel extends ChangeNotifier {
   }
 
   List<Map<String, dynamic>> _calculateDailyProgress(List<TaskModel> tasks) {
-    // Calculate daily progress over the last 30 days
     final dailyProgress = <Map<String, dynamic>>[];
     final now = DateTime.now();
-    
+
     for (int i = 29; i >= 0; i--) {
       final date = now.subtract(Duration(days: i));
       final tasksCompletedThatDay = tasks.where((task) {
@@ -286,17 +266,16 @@ class ProjectViewModel extends ChangeNotifier {
                task.updatedAt.month == date.month &&
                task.updatedAt.day == date.day;
       }).length;
-      
+
       dailyProgress.add({
         'date': date,
         'tasksCompleted': tasksCompletedThatDay,
       });
     }
-    
+
     return dailyProgress;
   }
 
-  // Create project with enhanced features
   Future<void> createProject({
     required String name,
     required String description,
@@ -309,27 +288,25 @@ class ProjectViewModel extends ChangeNotifier {
   }) async {
     _setCreating(true);
     _clearError();
-    
+
     try {
       final project = await _repository.createProject(
-  name,
-  description,
-  startDate: startDate,
-  dueDate: dueDate,
+        name,
+        description,
+        startDate: startDate,
+        dueDate: dueDate,
         memberIds: memberIds ?? [],
         status: status,
       );
-      
+
       _projects.add(project);
-      
-      // Set budget if provided
+
       if (budgetHours != null) {
         _projectBudgets[project.id] = budgetHours;
       }
-      
-      // Initialize analytics
+
       await _loadProjectSpecificAnalytics(project.id);
-      
+
       notifyListeners();
     } catch (e) {
       _setError('Failed to create project: ${e.toString()}');
@@ -339,47 +316,42 @@ class ProjectViewModel extends ChangeNotifier {
     }
   }
 
-  // Update project with enhanced tracking
   Future<void> updateProject({
     required String projectId,
     String? name,
     String? description,
     ProjectStatus? status,
-    DateTime? startDate,  // Add this parameter if missing
-  DateTime? dueDate,
+    DateTime? startDate,
+    DateTime? dueDate,
     DateTime? endDate,
     List<String>? memberIds,
     double? budgetHours,
   }) async {
     _setUpdating(true);
     _clearError();
-    
+
     try {
       final updatedProject = await _repository.updateProject(
-  projectId,
-  name: name,
-  description: description,
-  startDate: startDate, // This should be the parameter from the method
-  dueDate: dueDate,     // This should be the parameter from the method
-  memberIds: memberIds,
-  status: status,
-);
+        projectId,
+        name: name,
+        description: description,
+        startDate: startDate,
+        dueDate: dueDate,
+        memberIds: memberIds,
+        status: status,
+      );
 
-      
-      // Update in local list
       final index = _projects.indexWhere((p) => p.id == projectId);
       if (index >= 0) {
         _projects[index] = updatedProject;
       }
-      
-      // Update budget if provided
+
       if (budgetHours != null) {
         _projectBudgets[projectId] = budgetHours;
       }
-      
-      // Refresh analytics
+
       await _loadProjectSpecificAnalytics(projectId);
-      
+
       notifyListeners();
     } catch (e) {
       _setError('Failed to update project: ${e.toString()}');
@@ -389,11 +361,10 @@ class ProjectViewModel extends ChangeNotifier {
     }
   }
 
-  // Archive project
   Future<void> archiveProject(String projectId) async {
     _setUpdating(true);
     _clearError();
-    
+
     try {
       await updateProject(
         projectId: projectId,
@@ -407,33 +378,34 @@ class ProjectViewModel extends ChangeNotifier {
     }
   }
 
-  // Duplicate project
   Future<String> duplicateProject(String projectId, {String? newName}) async {
     _setCreating(true);
     _clearError();
-    
+
     try {
-      final originalProject = _projects.firstWhere((p) => p.id == projectId);
-      
+      // FIX: Use safe access for project
+      final originalProject = getProjectById(projectId);
+      if (originalProject == null) {
+        throw Exception('Original project not found for duplication.');
+      }
+
       final duplicatedProject = await _repository.createProject(
-  '${originalProject.name} (Copy)',
-  originalProject.description,
-  startDate: DateTime.now(),
-  dueDate: originalProject.dueDate,
-  memberIds: originalProject.memberIds,
-  status: ProjectStatus.planning,
-);
-      
+        '${originalProject.name} (Copy)',
+        originalProject.description,
+        startDate: DateTime.now(),
+        dueDate: originalProject.dueDate,
+        memberIds: originalProject.memberIds,
+        status: ProjectStatus.planning,
+      );
+
       _projects.add(duplicatedProject);
-      
-      // Copy budget settings
+
       if (_projectBudgets.containsKey(projectId)) {
         _projectBudgets[duplicatedProject.id] = _projectBudgets[projectId]!;
       }
-      
-      // Initialize analytics for new project
+
       await _loadProjectSpecificAnalytics(duplicatedProject.id);
-      
+
       notifyListeners();
       return duplicatedProject.id;
     } catch (e) {
@@ -444,7 +416,6 @@ class ProjectViewModel extends ChangeNotifier {
     }
   }
 
-  // Project template creation
   Future<void> createProjectFromTemplate({
     required String templateId,
     required String name,
@@ -454,10 +425,8 @@ class ProjectViewModel extends ChangeNotifier {
   }) async {
     _setCreating(true);
     _clearError();
-    
+
     try {
-      // This would load template data and create project
-      // For now, create a basic project
       await createProject(
         name: name,
         description: 'Project created from template',
@@ -473,12 +442,10 @@ class ProjectViewModel extends ChangeNotifier {
     }
   }
 
-  // Enhanced project insights
   Map<String, dynamic> getProjectInsights(String projectId) {
     final analytics = _projectAnalytics[projectId] ?? {};
     final timeEntries = _projectTimeEntries[projectId] ?? [];
-    
-    // Calculate additional insights
+
     final insights = <String, dynamic>{
       ...analytics,
       'riskLevel': _calculateProjectRisk(projectId),
@@ -487,7 +454,7 @@ class ProjectViewModel extends ChangeNotifier {
       'timeUtilization': _calculateTimeUtilization(timeEntries),
       'milestoneStatus': _calculateMilestoneStatus(projectId),
     };
-    
+
     return insights;
   }
 
@@ -495,7 +462,7 @@ class ProjectViewModel extends ChangeNotifier {
     final analytics = _projectAnalytics[projectId] ?? {};
     final progress = analytics['progress'] ?? 0.0;
     final budgetUsed = analytics['budgetUsed'] ?? 0.0;
-    
+
     if (budgetUsed > 0.9 && progress < 0.8) return 'High';
     if (budgetUsed > 0.7 && progress < 0.6) return 'Medium';
     return 'Low';
@@ -507,7 +474,7 @@ class ProjectViewModel extends ChangeNotifier {
     final progress = analytics['progress'] ?? 0.0;
     final budgetUsed = analytics['budgetUsed'] ?? 0.0;
     final velocity = analytics['velocity'] ?? 0.0;
-    
+
     if (budgetUsed > 0.8) {
       actions.add('Review budget allocation');
     }
@@ -517,34 +484,36 @@ class ProjectViewModel extends ChangeNotifier {
     if (progress < 0.3) {
       actions.add('Review project scope and priorities');
     }
-    
+
     return actions;
   }
 
   Map<String, double> _calculateTeamWorkload(String projectId) {
-    // Calculate workload distribution among team members
-    final project = _projects.firstWhere((p) => p.id == projectId);
+    // FIX: Use safe access for project
+    final project = getProjectById(projectId);
+    if (project == null) return {};
+
     final workload = <String, double>{};
-    
+
     for (final memberId in project.memberIds) {
       workload[memberId] = 0.8; // Placeholder calculation
     }
-    
+
     return workload;
   }
 
   Map<String, dynamic> _calculateTimeUtilization(List<TimeEntryModel> timeEntries) {
     if (timeEntries.isEmpty) return {};
-    
+
     final totalTime = timeEntries.fold<Duration>(
       Duration.zero,
       (sum, entry) => sum + _getEntryDuration(entry),
     );
-    
+
     final activeTime = timeEntries
         .where((entry) => !entry.description.toLowerCase().contains('break'))
         .fold<Duration>(Duration.zero, (sum, entry) => sum + _getEntryDuration(entry));
-    
+
     return {
       'totalHours': totalTime.inHours,
       'activeHours': activeTime.inHours,
@@ -553,7 +522,6 @@ class ProjectViewModel extends ChangeNotifier {
   }
 
   Map<String, dynamic> _calculateMilestoneStatus(String projectId) {
-    // This would calculate milestone completion status
     return {
       'totalMilestones': 4,
       'completedMilestones': 2,
@@ -562,14 +530,17 @@ class ProjectViewModel extends ChangeNotifier {
     };
   }
 
-  // Export project data
   Future<Map<String, dynamic>> exportProjectData(String projectId) async {
     try {
-      final project = _projects.firstWhere((p) => p.id == projectId);
+      // FIX: Use safe access for project
+      final project = getProjectById(projectId);
+      if (project == null) {
+        throw Exception('Project not found for export');
+      }
       final tasks = await _repository.getTasks(projectId: projectId);
       final timeEntries = _projectTimeEntries[projectId] ?? [];
       final analytics = _projectAnalytics[projectId] ?? {};
-      
+
       return {
         'project': project.toJson(),
         'tasks': tasks.map((t) => t.toJson()).toList(),
@@ -582,7 +553,6 @@ class ProjectViewModel extends ChangeNotifier {
     }
   }
 
-  // Filter and search methods
   void setStatusFilter(ProjectStatus? status) {
     _statusFilter = status;
     notifyListeners();
@@ -605,7 +575,6 @@ class ProjectViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Project budget management
   void setProjectBudget(String projectId, double budgetHours) {
     _projectBudgets[projectId] = budgetHours;
     notifyListeners();
@@ -621,12 +590,11 @@ class ProjectViewModel extends ChangeNotifier {
       Duration.zero,
       (sum, entry) => sum + _getEntryDuration(entry),
     ).inHours;
-    
+
     final budget = _projectBudgets[projectId] ?? 160.0;
     return budget > 0 ? totalHours / budget : 0.0;
   }
 
-  // Load available users for project assignment
   Future<void> _loadAvailableUsers() async {
     try {
       _availableUsers = await _repository.getUsers();
@@ -635,7 +603,6 @@ class ProjectViewModel extends ChangeNotifier {
     }
   }
 
-  // Helper methods
   void _setLoading(bool loading) {
     _isLoading = loading;
     notifyListeners();
@@ -663,9 +630,9 @@ class ProjectViewModel extends ChangeNotifier {
 
   void _clearError() {
     _errorMessage = null;
+    notifyListeners();
   }
 
-  // Get project by ID
   ProjectModel? getProjectById(String projectId) {
     try {
       return _projects.firstWhere((p) => p.id == projectId);
@@ -674,61 +641,51 @@ class ProjectViewModel extends ChangeNotifier {
     }
   }
 
-  // Get project analytics
   Map<String, dynamic>? getProjectAnalytics(String projectId) {
     return _projectAnalytics[projectId];
   }
 
-  // Get project time entries
   List<TimeEntryModel> getProjectTimeEntries(String projectId) {
     return _projectTimeEntries[projectId] ?? [];
   }
 
-  // Calculate project health score
   double calculateProjectHealthScore(String projectId) {
     final analytics = _projectAnalytics[projectId];
     if (analytics == null) return 0.0;
-    
+
     final progress = analytics['progress'] ?? 0.0;
     final budgetUsed = analytics['budgetUsed'] ?? 0.0;
     final velocity = analytics['velocity'] ?? 0.0;
-    
-    // Simple health score calculation
+
     double score = 100.0;
-    
-    // Deduct points for budget overrun
+
     if (budgetUsed > 1.0) {
       score -= (budgetUsed - 1.0) * 50;
     }
-    
-    // Deduct points for low velocity
+
     if (velocity < 2.0) {
       score -= (2.0 - velocity) * 10;
     }
-    
-    // Add points for good progress
+
     score += progress * 20;
-    
+
     return score.clamp(0.0, 100.0);
   }
 
-  // Delete project
   Future<void> deleteProject(String projectId) async {
     _setDeleting(true);
     _clearError();
-    
+
     try {
       await _repository.deleteProject(projectId);
-      
-      // Remove from local list
+
       _projects.removeWhere((p) => p.id == projectId);
-      
-      // Clean up analytics data
+
       _projectAnalytics.remove(projectId);
       _projectTimeEntries.remove(projectId);
       _projectBudgets.remove(projectId);
       _projectProgress.remove(projectId);
-      
+
       notifyListeners();
     } catch (e) {
       _setError('Failed to delete project: ${e.toString()}');
@@ -738,32 +695,28 @@ class ProjectViewModel extends ChangeNotifier {
     }
   }
 
-  // Get projects by status
   List<ProjectModel> getProjectsByStatus(ProjectStatus status) {
     return _projects.where((p) => p.status == status).toList();
   }
 
-  // Get projects by owner
   List<ProjectModel> getProjectsByOwner(String ownerId) {
     return _projects.where((p) => p.ownerId == ownerId).toList();
   }
 
-  // Get user's projects (owned or member)
   List<ProjectModel> getUserProjects(String userId) {
-    return _projects.where((p) => 
+    return _projects.where((p) =>
         p.ownerId == userId || p.memberIds.contains(userId)
     ).toList();
   }
 
-  // Get project statistics
   Map<String, dynamic> getProjectStatistics() {
     final totalProjects = _projects.length;
     final activeProjects = _projects.where((p) => p.status == ProjectStatus.active).length;
     final completedProjects = _projects.where((p) => p.status == ProjectStatus.completed).length;
-    final overdueProjects = _projects.where((p) => 
+    final overdueProjects = _projects.where((p) =>
         p.dueDate != null && p.dueDate!.isBefore(DateTime.now()) && p.status != ProjectStatus.completed
     ).length;
-    
+
     return {
       'totalProjects': totalProjects,
       'activeProjects': activeProjects,
@@ -773,16 +726,14 @@ class ProjectViewModel extends ChangeNotifier {
     };
   }
 
-  // Refresh project data
   Future<void> refreshProject(String projectId) async {
     await loadProjectById(projectId);
   }
 
-  // Bulk operations
   Future<void> bulkUpdateProjectStatus(List<String> projectIds, ProjectStatus status) async {
     _setUpdating(true);
     _clearError();
-    
+
     try {
       for (final projectId in projectIds) {
         await updateProject(projectId: projectId, status: status);
